@@ -1,0 +1,44 @@
+name: Check that project is buildable and healthy
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build project
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: 0 # needed?
+    steps:
+      - name: Checkout Source code
+        uses: actions/checkout@v3
+
+      - name: Install Rust Toolchain
+        uses: actions-rs/toolchain@v1
+
+      - name: Install WASM target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Restore caches
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/
+            target/
+            bin/cliain/target/
+          key: cache-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cache
+
+      - name: Build node
+        run: cargo build
+
+      - name: Build cliain
+        working-directory: bin/cliain/
+        run: cargo build
