@@ -1,41 +1,50 @@
-use std::{default::Default, thread::sleep, time::Duration};
+use std::{default::Default, error::Error as StdError, fmt::Debug, thread::sleep, time::Duration};
 
-use ac_primitives::SubstrateDefaultSignedExtra;
+use ac_primitives::{PlainTipExtrinsicParamsBuilder, SubstrateDefaultSignedExtra};
 pub use account::{get_free_balance, locks};
 pub use balances::total_issuance;
 use codec::{Decode, Encode};
 pub use debug::print_storages;
-pub use fee::{get_next_fee_multiplier, get_tx_fee_info, FeeInfo};
+pub use elections::{
+    get_committee_seats, get_current_era_non_reserved_validators,
+    get_current_era_reserved_validators, get_era_validators, get_next_era_committee_seats,
+    get_next_era_non_reserved_validators, get_next_era_reserved_validators,
+    get_validator_block_count,
+};
+pub use fee::get_next_fee_multiplier;
 pub use finalization::set_emergency_finalizer as finalization_set_emergency_finalizer;
 use log::{info, warn};
 pub use multisig::{
     compute_call_hash, perform_multisig_with_threshold_1, MultisigError, MultisigParty,
     SignatureAggregation,
 };
+pub use primitives::{Balance, BlockHash, BlockNumber, Header};
 pub use rpc::{emergency_finalize, rotate_keys, rotate_keys_raw_result, state_query_storage_at};
 pub use session::{
-    change_next_era_reserved_validators, change_validators, get_current_session, get_session,
-    get_session_period, set_keys, wait_for as wait_for_session,
-    wait_for_at_least as wait_for_at_least_session, Keys as SessionKeys,
+    change_next_era_reserved_validators, change_validators, get_current_session,
+    get_current_validator_count, get_current_validators, get_next_session_keys, get_session,
+    get_session_first_block, get_session_period, get_validators_for_session, set_keys,
+    wait_for as wait_for_session, wait_for_at_least as wait_for_at_least_session,
+    Keys as SessionKeys,
 };
 use sp_core::{ed25519, sr25519, storage::StorageKey, Pair, H256};
-use sp_runtime::{
-    generic::Header as GenericHeader,
-    traits::{BlakeTwo256, Header as HeaderT},
-};
 pub use staking::{
     batch_bond as staking_batch_bond, batch_nominate as staking_batch_nominate,
-    bond as staking_bond, bonded as staking_bonded, force_new_era as staking_force_new_era,
-    get_current_era, get_era, get_era_reward_points, get_exposure, get_payout_for_era,
-    get_sessions_per_era, ledger as staking_ledger, multi_bond as staking_multi_bond,
-    nominate as staking_nominate, payout_stakers, payout_stakers_and_assert_locked_balance,
-    set_staking_limits as staking_set_staking_limits, validate as staking_validate,
+    bond as staking_bond, bond_extra_stake, bonded as staking_bonded,
+    chill_validator as staking_chill_validator, chill_validators as staking_chill_validators,
+    force_new_era as staking_force_new_era, get_current_era, get_era, get_era_reward_points,
+    get_eras_stakers_storage_key, get_exposure, get_minimum_validator_count, get_payout_for_era,
+    get_sessions_per_era, get_stakers_as_storage_keys,
+    get_stakers_as_storage_keys_from_storage_key, ledger as staking_ledger,
+    multi_bond as staking_multi_bond, nominate as staking_nominate, payout_stakers,
+    payout_stakers_and_assert_locked_balance, set_staking_limits as staking_set_staking_limits,
+    validate as staking_validate, wait_for_at_least_era, wait_for_era_completion,
     wait_for_full_era_completion, wait_for_next_era, RewardPoint, StakingLedger,
 };
-pub use substrate_api_client;
+pub use substrate_api_client::{self, AccountId, XtStatus};
 use substrate_api_client::{
-    rpc::ws_client::WsRpcClient, std::error::Error, AccountId, Api, ApiResult,
-    PlainTipExtrinsicParams, RpcClient, UncheckedExtrinsicV4, XtStatus,
+    rpc::ws_client::WsRpcClient, std::error::Error, Api, ApiResult, PlainTipExtrinsicParams,
+    RpcClient, UncheckedExtrinsicV4,
 };
 pub use system::set_code;
 pub use transfer::{
@@ -55,6 +64,7 @@ pub use waiting::{wait_for_event, wait_for_finalized_block};
 mod account;
 mod balances;
 mod debug;
+mod elections;
 mod fee;
 mod finalization;
 mod multisig;
@@ -81,12 +91,10 @@ impl FromStr for WsRpcClient {
     }
 }
 
-pub type BlockNumber = u32;
-pub type Header = GenericHeader<BlockNumber, BlakeTwo256>;
-pub type BlockHash = <Header as HeaderT>::Hash;
 pub type KeyPair = sr25519::Pair;
 pub type AlephKeyPair = ed25519::Pair;
-pub type Connection = Api<KeyPair, WsRpcClient, PlainTipExtrinsicParams>;
+pub type ExtrinsicParams = PlainTipExtrinsicParams;
+pub type Connection = Api<KeyPair, WsRpcClient, ExtrinsicParams>;
 pub type Extrinsic<Call> = UncheckedExtrinsicV4<Call, SubstrateDefaultSignedExtra>;
 
 /// Common abstraction for different types of connections.
@@ -97,11 +105,28 @@ pub trait AnyConnection: Clone + Send {
     /// objects are often passed to some macro like `compose_extrinsic!` and thus there is not
     /// enough information for type inferring required for `Into<Connection>`.
     fn as_connection(&self) -> Connection;
+}
 
+pub trait ReadStorage: AnyConnection {
     /// Reads value from storage. Panics if it couldn't be read.
     fn read_storage_value<T: Decode>(&self, pallet: &'static str, key: &'static str) -> T {
         self.read_storage_value_or_else(pallet, key, || {
             panic!("Value is `None` or couldn't have been decoded")
+        })
+    }
+
+    /// Reads value from storage at given block (empty means `best known`). Panics if it couldn't be read.
+    fn read_storage_value_at_block<T: Decode>(
+        &self,
+        pallet: &'static str,
+        key: &'static str,
+        block_hash: Option<H256>,
+    ) -> T {
+        self.read_storage_value_at_block_or_else(pallet, key, block_hash, || {
+            panic!(
+                "Retrieved storage value ({}/{}) was equal `null`",
+                pallet, key
+            )
         })
     }
 
@@ -113,12 +138,24 @@ pub trait AnyConnection: Clone + Send {
         key: &'static str,
         fallback: F,
     ) -> T {
+        self.read_storage_value_at_block_or_else(pallet, key, None, fallback)
+    }
+
+    /// Reads value from storage from a given block. In case value is `None` or couldn't have been decoded, result of
+    /// `fallback` is returned.
+    fn read_storage_value_at_block_or_else<F: FnOnce() -> T, T: Decode>(
+        &self,
+        pallet: &'static str,
+        key: &'static str,
+        block_hash: Option<H256>,
+        fallback: F,
+    ) -> T {
         self.as_connection()
-            .get_storage_value(pallet, key, None)
+            .get_storage_value(pallet, key, block_hash)
             .unwrap_or_else(|e| {
                 panic!(
-                    "Key `{}::{}` should be present in storage, error {:?}",
-                    pallet, key, e
+                    "Unable to retrieve a storage value {}/{} at block {:#?}: {}",
+                    pallet, key, block_hash, e
                 )
             })
             .unwrap_or_else(fallback)
@@ -165,6 +202,71 @@ pub trait AnyConnection: Clone + Send {
         constant: &'static str,
     ) -> T {
         self.read_constant_or_else(pallet, constant, Default::default)
+    }
+
+    fn read_storage_map<K: Encode + Debug + Clone, T: Decode + Clone>(
+        &self,
+        pallet: &'static str,
+        map_name: &'static str,
+        map_key: K,
+        block_hash: Option<H256>,
+    ) -> Option<T> {
+        self.as_connection()
+            .get_storage_map(pallet, map_name, map_key.clone(), block_hash)
+            .unwrap_or_else(|e| panic!("Unable to retrieve a storage map for pallet={} map_name={} map_key={:#?} block_hash={:#?}: {}", pallet, map_name, &map_key, block_hash, e))
+    }
+}
+
+impl<C: AnyConnection> ReadStorage for C {}
+
+pub trait BalanceTransfer {
+    type TransferTx;
+    type Error: StdError;
+
+    fn create_transfer_tx(&self, account: AccountId, amount: Balance) -> Self::TransferTx;
+    fn transfer(&self, tx: Self::TransferTx, status: XtStatus)
+        -> Result<Option<H256>, Self::Error>;
+}
+
+pub trait BatchTransactions<Tx> {
+    type Error: StdError;
+
+    fn batch_and_send_transactions<'a>(
+        &self,
+        transactions: impl IntoIterator<Item = &'a Tx>,
+        status: XtStatus,
+    ) -> Result<Option<H256>, Self::Error>
+    where
+        Tx: 'a;
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+pub struct FeeInfo {
+    pub fee_without_weight: Balance,
+    pub unadjusted_weight: Balance,
+    pub adjusted_weight: Balance,
+}
+
+pub trait GetTxInfo<Tx> {
+    fn get_tx_info(&self, tx: &Tx) -> FeeInfo;
+}
+
+pub trait CallSystem {
+    type Error: StdError;
+
+    fn fill_block(&self, target_ratio: u32, status: XtStatus) -> Result<(), Self::Error>;
+}
+
+pub trait ManageParams {
+    fn set_tip(self, tip: Balance) -> Self;
+}
+
+impl ManageParams for SignedConnection {
+    fn set_tip(self, tip: Balance) -> Self {
+        let xt_params = PlainTipExtrinsicParamsBuilder::new().tip(tip);
+        let SignedConnection { mut inner, signer } = self;
+        inner = inner.set_extrinsic_params_builder(xt_params);
+        Self { inner, signer }
     }
 }
 
@@ -266,6 +368,7 @@ pub fn create_connection(address: &str) -> Connection {
     create_custom_connection(address).expect("Connection should be created")
 }
 
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 enum Protocol {
     Ws,
     Wss,
@@ -400,8 +503,17 @@ pub fn get_block_hash<C: AnyConnection>(connection: &C, block_number: BlockNumbe
     connection
         .as_connection()
         .get_block_hash(Some(block_number))
-        .expect("API call should have succeeded.")
+        .expect("Could not fetch block hash")
         .unwrap_or_else(|| {
             panic!("Failed to obtain block hash for block {}.", block_number);
         })
+}
+
+pub fn get_current_block_number<C: AnyConnection>(connection: &C) -> BlockNumber {
+    connection
+        .as_connection()
+        .get_header::<Header>(None)
+        .expect("Could not fetch header")
+        .expect("Block exists; qed")
+        .number
 }
