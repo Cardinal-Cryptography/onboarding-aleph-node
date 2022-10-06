@@ -1,4 +1,4 @@
-use std::{collections::HashSet, path::PathBuf, str::FromStr};
+use std::{collections::HashSet, str::FromStr};
 
 use aleph_primitives::{
     staking::{MIN_NOMINATOR_BOND, MIN_VALIDATOR_BOND},
@@ -11,7 +11,7 @@ use aleph_runtime::{
 use clap::Args;
 use libp2p::PeerId;
 use pallet_staking::{Forcing, StakerStatus};
-use sc_service::{config::BasePath, ChainType};
+use sc_service::ChainType;
 use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Number, Value};
 use sp_application_crypto::Ss58Codec;
@@ -110,18 +110,6 @@ pub struct ChainParams {
     #[clap(long, value_name = "TYPE", parse(from_str = parse_chaintype), default_value = CHAINTYPE_LIVE)]
     chain_type: ChainType,
 
-    /// Specify custom base path
-    #[clap(long, short = 'd', value_name = "PATH", parse(from_os_str))]
-    base_path: PathBuf,
-
-    /// Specify filename to write node private p2p keys to
-    /// Resulting keys will be stored at: base_path/account_id/node_key_file for each node
-    #[clap(long, default_value = "p2p_secret")]
-    node_key_file: String,
-
-    #[clap(long, default_value = DEFAULT_BACKUP_FOLDER)]
-    backup_dir: String,
-
     /// Chain name. Default is "Aleph Zero Development"
     #[clap(long, default_value = "Aleph Zero Development")]
     chain_name: String,
@@ -131,7 +119,7 @@ pub struct ChainParams {
     token_symbol: String,
 
     /// AccountIds of authorities forming the committee at the genesis (comma delimited)
-    #[clap(long, require_value_delimiter = true, parse(from_str = parse_account_id))]
+    #[clap(long, takes_value = true, require_value_delimiter = true, value_delimiter = ',', parse(from_str = parse_account_id), min_values = 1)]
     account_ids: Vec<AccountId>,
 
     /// AccountId of the sudo account
@@ -141,6 +129,10 @@ pub struct ChainParams {
     /// AccountId of the optional faucet account
     #[clap(long, parse(from_str = parse_account_id))]
     faucet_account_id: Option<AccountId>,
+
+    /// Minimum number of stakers before chain enters emergency state.
+    #[clap(long, default_value = "4")]
+    min_validator_count: u32,
 }
 
 impl ChainParams {
@@ -150,18 +142,6 @@ impl ChainParams {
 
     pub fn chain_type(&self) -> ChainType {
         self.chain_type.clone()
-    }
-
-    pub fn base_path(&self) -> BasePath {
-        self.base_path.clone().into()
-    }
-
-    pub fn node_key_file(&self) -> &str {
-        &self.node_key_file
-    }
-
-    pub fn backup_dir(&self) -> &str {
-        &self.backup_dir
     }
 
     pub fn chain_name(&self) -> &str {
@@ -182,6 +162,10 @@ impl ChainParams {
 
     pub fn faucet_account_id(&self) -> Option<AccountId> {
         self.faucet_account_id.clone()
+    }
+
+    pub fn min_validator_count(&self) -> u32 {
+        self.min_validator_count
     }
 }
 
@@ -230,6 +214,7 @@ fn generate_chain_spec_config(
     let chain_type = chain_params.chain_type();
     let sudo_account = chain_params.sudo_account_id();
     let faucet_account = chain_params.faucet_account_id();
+    let min_validator_count = chain_params.min_validator_count();
 
     Ok(ChainSpec::from_genesis(
         // Name
@@ -244,6 +229,7 @@ fn generate_chain_spec_config(
                 sudo_account.clone(), // Sudo account, will also be pre funded
                 faucet_account.clone(), // Pre-funded faucet account
                 controller_accounts.clone(), // Controller accounts for staking.
+                min_validator_count,
             )
         },
         // Bootnodes
@@ -345,6 +331,7 @@ fn generate_genesis_config(
     sudo_account: AccountId,
     faucet_account: Option<AccountId>,
     controller_accounts: Vec<AccountId>,
+    min_validator_count: u32,
 ) -> GenesisConfig {
     let special_accounts = match faucet_account {
         Some(faucet_id) => vec![sudo_account.clone(), faucet_id],
@@ -400,7 +387,7 @@ fn generate_genesis_config(
             force_era: Forcing::NotForcing,
             validator_count,
             // to satisfy some e2e tests as this cannot be changed during runtime
-            minimum_validator_count: 4,
+            minimum_validator_count: min_validator_count,
             slash_reward_fraction: Perbill::from_percent(10),
             stakers: accounts_config.stakers,
             min_validator_bond: MIN_VALIDATOR_BOND,

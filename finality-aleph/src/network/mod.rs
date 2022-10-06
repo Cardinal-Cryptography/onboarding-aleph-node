@@ -1,4 +1,8 @@
-use std::{collections::HashSet, fmt::Debug, hash::Hash};
+use std::{
+    collections::HashSet,
+    fmt::{Debug, Display},
+    hash::Hash,
+};
 
 use aleph_bft::Recipient;
 use async_trait::async_trait;
@@ -18,13 +22,14 @@ mod split;
 
 pub use aleph::{NetworkData as AlephNetworkData, NetworkWrapper};
 pub use component::{
-    Network as ComponentNetwork, Receiver as ReceiverComponent, Sender as SenderComponent,
+    Network as ComponentNetwork, NetworkExt as ComponentNetworkExt,
+    NetworkMap as ComponentNetworkMap, Receiver as ReceiverComponent, Sender as SenderComponent,
     SimpleNetwork,
 };
 use manager::SessionCommand;
 pub use manager::{ConnectionIO, ConnectionManager, ConnectionManagerConfig};
 pub use service::{Service, IO};
-pub use session::{Manager as SessionManager, ManagerError, Network as SessionNetwork};
+pub use session::{Manager as SessionManager, ManagerError};
 pub use split::{split, Split};
 
 #[cfg(test)]
@@ -33,7 +38,7 @@ pub mod testing {
 }
 
 /// Represents the id of an arbitrary node.
-pub trait PeerId: PartialEq + Eq + Copy + Clone + Debug + Hash + Codec + Send {}
+pub trait PeerId: PartialEq + Eq + Copy + Clone + Debug + Display + Hash + Codec + Send {}
 
 /// Represents the address of an arbitrary node.
 pub trait Multiaddress: Debug + Hash + Codec + Clone + Eq {

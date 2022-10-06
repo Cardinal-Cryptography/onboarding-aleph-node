@@ -22,6 +22,8 @@ use codec::{Decode, Encode};
 use frame_support::traits::StorageVersion;
 pub use impls::{compute_validator_scaled_total_rewards, LENIENT_THRESHOLD};
 pub use pallet::*;
+use pallets_support::StorageMigration;
+pub use primitives::EraValidators;
 use scale_info::TypeInfo;
 use sp_std::{
     collections::{btree_map::BTreeMap, btree_set::BTreeSet},
@@ -32,21 +34,6 @@ const STORAGE_VERSION: StorageVersion = StorageVersion::new(3);
 
 pub type BlockCount = u32;
 pub type TotalReward = u32;
-
-#[derive(Decode, Encode, TypeInfo, Eq, PartialEq)]
-pub struct EraValidators<AccountId> {
-    pub reserved: Vec<AccountId>,
-    pub non_reserved: Vec<AccountId>,
-}
-
-impl<AccountId> Default for EraValidators<AccountId> {
-    fn default() -> Self {
-        Self {
-            reserved: vec![],
-            non_reserved: vec![],
-        }
-    }
-}
 
 #[derive(Decode, Encode, TypeInfo)]
 pub struct ValidatorTotalRewards<T>(pub BTreeMap<T, TotalReward>);
@@ -65,10 +52,7 @@ pub mod pallet {
     use primitives::CommitteeSeats;
 
     use super::*;
-    use crate::{
-        migrations::StorageMigration,
-        traits::{EraInfoProvider, SessionInfoProvider, ValidatorRewardsHandler},
-    };
+    use crate::traits::{EraInfoProvider, SessionInfoProvider, ValidatorRewardsHandler};
 
     #[pallet::config]
     pub trait Config: frame_system::Config {
